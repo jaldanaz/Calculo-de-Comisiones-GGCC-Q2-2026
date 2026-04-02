@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from io import StringIO
 
 # ==========================================
 # 1. CONSTANTES (Extraídas de tus Documentos)
@@ -20,6 +19,7 @@ TACTICAL_MATRIX = {
     23990: {2: 9596, 3: 7677, 4: 7197}
 }
 
+# Tipos de venta alineados al Anexo Comisional
 MULTIPLICADORES = {
     "BAM / Nueva / Porta Prepago": [2.0, 2.3, 2.7],
     "Portabilidad Postpago": [2.8, 3.1, 3.4],
@@ -32,11 +32,18 @@ MULTIPLICADORES = {
 # ==========================================
 class FinancialEngine:
     @staticmethod
-    def get_arpu_details(tipo, plan, cant):
-        if "Porta" in tipo and cant >= 2:
+    def get_arpu_details(tipo, plan, cant, is_manual=False, manual_arpu=0):
+        """Calcula el ARPU determinando si es automático o una excepción manual."""
+        if is_manual:
+            ahorro = 1 - (manual_arpu / plan) if plan > 0 else 0
+            return manual_arpu, f"{int(ahorro*100)}% (Manual/Exc.)"
+            
+        # Lógica Automática (Oferta Táctica 2026)
+        if "Porta" in tipo and "Prepago" not in tipo and cant >= 2:
             arpu = TACTICAL_MATRIX.get(plan, {}).get(min(cant, 4), plan)
             ahorro = 1 - (arpu / plan)
             return arpu, f"{int(ahorro*100)}% (Táctico)"
+            
         return plan, "0% (Base)"
 
     @staticmethod
@@ -50,113 +57,135 @@ class FinancialEngine:
 # 3. INTERFAZ PROFESIONAL
 # ==========================================
 def main():
-    st.set_page_config(page_title="WOM Financial Audit - Jorge Aldana", layout="wide")
+    st.set_page_config(page_title="WOM Financial Audit Pro", layout="wide")
     
     if 'mix_ventas' not in st.session_state:
         st.session_state.mix_ventas = []
 
     st.title("📈 Control de Ingresos y Mix de Ventas")
-    st.info("Configuración basada en Anexo Comisional y Oferta Táctica Enero 2026.")
+    st.info("Soporta Carga Táctica Automatizada y Excepciones Comerciales Manuales.")
 
     tab_carga, tab_auditoria = st.tabs(["📥 Cargar Ventas", "🔍 Desglose de Ingresos"])
 
     with tab_carga:
-        col_f, col_v = st.columns([1, 2])
+        col_f, col_v = st.columns([1, 2.2])
         with col_f:
             with st.form("nueva_venta", clear_on_submit=True):
-                st.subheader("Nueva Operación")
-                cliente = st.text_input("Nombre del Cliente")
-                tipo = st.selectbox("Tipo de Producto", list(MULTIPLICADORES.keys()))
-                plan = st.selectbox("Plan", [12990, 15990, 18990, 23990])
+                st.subheader("Configuración de Venta")
+                cliente = st.text_input("Cliente / Proyecto")
+                tipo = st.selectbox("Tipo de Línea", list(MULTIPLICADORES.keys()))
+                plan = st.selectbox("Plan Comercial", [12990, 15990, 18990, 23990])
                 cant = st.number_input("Cantidad de Líneas", min_value=1, step=1)
                 
-                if st.form_submit_button("Confirmar y Sumar"):
-                    arpu, desc_label = FinancialEngine.get_arpu_details(tipo, plan, cant)
+                st.divider()
+                st.markdown("#### ⚙️ Excepciones y Equipos")
+                
+                # Checkbox para activar sobreescritura manual
+                is_manual = st.checkbox("Aplicar Descuento Especial (Sobreescribir Matriz)")
+                manual_arpu = 0
+                if is_manual:
+                    manual_arpu = st.number_input(
+                        "Ingresar ARPU Neto Final ($)", 
+                        min_value=0, 
+                        value=plan,
+                        help="Ingresa el valor exacto del plan tras aplicar el descuento especial autorizado."
+                    )
+                
+                # Dinámico: Solo mostrar si el tipo incluye "Equipo"
+                cuota_equipo = 0
+                if "Equipo" in tipo:
+                    cuota_equipo = st.number_input(
+                        "Cuota Mensual de Arriendo Equipo ($)", 
+                        min_value=0, 
+                        value=0,
+                        help="Ingresa el valor de la cuota. Útil para modelos de nueva inclusión sin tabla."
+                    )
+                
+                if st.form_submit_button("Confirmar y Sumar al Mix"):
+                    # Procesar ARPU (Automático vs Manual)
+                    arpu, desc_label = FinancialEngine.get_arpu_details(tipo, plan, cant, is_manual, manual_arpu)
+                    
                     st.session_state.mix_ventas.append({
-                        "Cliente": cliente,
+                        "Cliente": cliente if cliente else "N/A",
                         "Tipo": tipo,
                         "Plan Base": plan,
                         "Cant": cant,
                         "ARPU Neto": arpu,
-                        "Desc.": desc_label
+                        "Desc. Aplicado": desc_label,
+                        "Cuota Equipo": cuota_equipo
                     })
-                    st.success("Venta agregada.")
+                    st.success("Venta procesada y agregada con éxito.")
 
         with col_v:
             st.subheader("Estado Actual del Mes")
             if st.session_state.mix_ventas:
                 df = pd.DataFrame(st.session_state.mix_ventas)
-                st.dataframe(df, use_container_width=True)
+                # Formateo visual rápido para la tabla
+                df_visual = df.copy()
+                df_visual["Plan Base"] = df_visual["Plan Base"].apply(lambda x: f"${x:,}")
+                df_visual["ARPU Neto"] = df_visual["ARPU Neto"].apply(lambda x: f"${int(x):,}")
+                df_visual["Cuota Equipo"] = df_visual["Cuota Equipo"].apply(lambda x: f"${int(x):,}")
                 
-                # Exportación
+                st.dataframe(df_visual, use_container_width=True)
+                
                 csv = df.to_csv(index=False).encode('utf-8')
-                st.download_button("📥 Descargar Reporte Mensual (CSV)", data=csv, file_name="mix_ventas_wom.csv", mime="text/csv")
+                st.download_button("📥 Descargar Reporte (CSV)", data=csv, file_name="mix_ventas_wom.csv", mime="text/csv")
                 
-                if st.button("🗑️ Reiniciar Mes"):
+                if st.button("🗑️ Limpiar Mes Completo"):
                     st.session_state.mix_ventas = []
                     st.rerun()
             else:
-                st.write("No hay datos cargados.")
+                st.write("El embudo está vacío. Comienza a cargar ventas a la izquierda.")
 
     with tab_auditoria:
         if not st.session_state.mix_ventas:
-            st.warning("Carga al menos una venta para ver el desglose.")
+            st.warning("Carga al menos una venta para calcular el desglose.")
         else:
             total_lines = sum(v['Cant'] for v in st.session_state.mix_ventas)
             tier_idx, tier_label = FinancialEngine.get_tier_info(total_lines)
             
-            st.subheader(f"Resumen de Desempeño: {tier_label}")
+            st.subheader(f"Auditoría de Desempeño: {tier_label}")
             
-            # Detalle Técnico de Comisiones
             audit_data = []
             comision_total = 0
+            
             for v in st.session_state.mix_ventas:
                 mult = MULTIPLICADORES[v["Tipo"]][tier_idx] if tier_idx is not None else 0
+                # La comisión se calcula sobre el ARPU Neto (el plan con el descuento aplicado)
                 subtotal = v["ARPU Neto"] * mult * v["Cant"]
                 comision_total += subtotal
+                
                 audit_data.append({
                     "Producto": v["Tipo"],
                     "Líneas": v["Cant"],
-                    "ARPU Neto": f"${v['ARPU Neto']:,}",
-                    "Mult.": f"x{mult}",
-                    "Subtotal": f"${int(subtotal):,}"
+                    "ARPU (Comisionable)": f"${int(v['ARPU Neto']):,}",
+                    "Cuota Equipo": f"${int(v['Cuota Equipo']):,}",
+                    "Tasa / Mult": f"x{mult}",
+                    "Comisión Generada": f"${int(subtotal):,}"
                 })
             
             st.table(pd.DataFrame(audit_data))
             
-            # Tope Comisional
             if comision_total > 3500000:
                 comision_total = 3500000
-                st.warning("Se ha aplicado el Tope Comisional de $3.500.000 s/Anexo.")
+                st.warning("Tope Comisional Aplicado: $3.500.000")
 
-            # Parámetros Legales
             st.divider()
             c1, c2, c3 = st.columns(3)
-            habiles = c1.number_input("Días Hábiles Trabajados", value=21)
-            festivos = c2.number_input("Domingos/Festivos", value=5)
+            habiles = c1.number_input("Días Hábiles", value=21)
+            festivos = c2.number_input("Festivos", value=5)
             
             sc = (comision_total / habiles) * festivos if habiles > 0 else 0
             
-            # Cálculo Final
             imponible = HABERES_FIJOS["Sueldo Base"] + HABERES_FIJOS["Gratificación Legal"] + comision_total + sc
             no_imponible = HABERES_FIJOS["Movilización"] + HABERES_FIJOS["Colación"] + HABERES_FIJOS["Ajuste Sencillo"]
-            
-            # Neto estimado (Factor 0.81 para AFP/Salud/Impuesto)
             liquido = (imponible * 0.81) + no_imponible
 
-            st.metric("Total Líneas Mes", total_lines)
+            st.metric("Total Líneas Escrutadas", total_lines)
             st.metric("Comisión Proyectada", f"${int(comision_total):,}")
             st.metric("Semana Corrida", f"${int(sc):,}")
             
-            st.markdown(f"""
-            ### 💵 Renta Líquida Final Estimada: **${int(liquido):,}**
-            ---
-            **Explicación para Liquidación:**
-            1. **Sueldo Base + Gratificación:** ${HABERES_FIJOS['Sueldo Base'] + HABERES_FIJOS['Gratificación Legal']:,} (Fijo)
-            2. **Comisiones:** Acumulado de {total_lines} líneas en tramo {tier_label}.
-            3. **Semana Corrida:** Proporcional a ${int(comision_total):,} de variable sobre {habiles} días.
-            4. **Descuentos Legales:** Estimación de previsión e impuestos sobre imponible de ${int(imponible):,}.
-            """)
+            st.success(f"### 💵 Renta Líquida Estimada: **${int(liquido):,}**")
 
 if __name__ == "__main__":
     main()
